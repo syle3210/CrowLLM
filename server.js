@@ -16,6 +16,13 @@ const MODEL = "mistral-medium-3.5:free";
 
 const REASONING_EFFORT = "high";
 
+const REASONING_MODELS = [
+  "mistral-medium-3.5:free",
+  "mistral-medium:free",
+  "mistral-large-3:free",
+  "mistral-large:free"
+];
+
 const CROWLLM_URL =
   "https://crowllm.com/v1/chat/completions";
 
