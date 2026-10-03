@@ -12,8 +12,6 @@ const PORT = process.env.PORT || 3000;
 
 const CROWLLM_API_KEY = process.env.CROWLLM_API_KEY;
 
-const MODEL = "mistral-medium-3.5:free";
-
 const REASONING_EFFORT = "high";
 
 const CROWLLM_URL =
@@ -49,7 +47,6 @@ app.get("/", (req, res) => {
   res.json({
     status: "online",
     service: "CrowLLM JanitorAI Proxy",
-    model: MODEL,
     reasoning_effort: REASONING_EFFORT
   });
 });
@@ -70,9 +67,23 @@ app.post("/v1/chat/completions", async (req, res) => {
 
     const incoming = req.body || {};
 
+    // Keep the model selected by JanitorAI.
+    // This allows you to switch between:
+    //
+    // mistral-medium-3.5:free
+    // mistral-medium:free
+    // mistral-large-3:free
+    // mistral-large:free
+    //
+    // and other CrowLLM models normally.
+
     const payload = {
       ...incoming,
-      model: MODEL,
+
+      // Keep whatever model JanitorAI selected.
+      model: incoming.model,
+
+      // Apply high reasoning.
       reasoning_effort: REASONING_EFFORT
     };
 
