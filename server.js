@@ -16,13 +16,6 @@ const MODEL = "mistral-medium-3.5:free";
 
 const REASONING_EFFORT = "high";
 
-const REASONING_MODELS = [
-  "mistral-medium-3.5:free",
-  "mistral-medium:free",
-  "mistral-large-3:free",
-  "mistral-large:free"
-];
-
 const CROWLLM_URL =
   "https://crowllm.com/v1/chat/completions";
 
@@ -79,11 +72,7 @@ app.post("/v1/chat/completions", async (req, res) => {
 
     const payload = {
       ...incoming,
-
-      // Force the model we selected above.
       model: MODEL,
-
-      // Attempt to control reasoning.
       reasoning_effort: REASONING_EFFORT
     };
 
@@ -105,7 +94,6 @@ app.post("/v1/chat/completions", async (req, res) => {
       body: JSON.stringify(payload)
     });
 
-    // Preserve the response content type.
     const contentType =
       response.headers.get("content-type") ||
       "application/json";
@@ -113,7 +101,6 @@ app.post("/v1/chat/completions", async (req, res) => {
     res.status(response.status);
     res.setHeader("Content-Type", contentType);
 
-    // Forward the response body exactly as received.
     const body = await response.text();
 
     console.log("CrowLLM response status:", response.status);
