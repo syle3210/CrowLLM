@@ -1,140 +1,127 @@
-const express = require("express");
+import express from 'express';
+import cors from 'cors';
+import axios from 'axios';
 
 const app = express();
-
-app.use(express.json({ limit: "10mb" }));
-
 const PORT = process.env.PORT || 3000;
 
-// ==========================================
-// CROWLLM CONFIG
-// ==========================================
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
 
 const CROWLLM_API_KEY = process.env.CROWLLM_API_KEY;
+const CROWLLM_BASE = 'https://crowllm.com/v1';
 
-const MODEL = "mistral-medium-3.5:free";
+app.get('/', (req, res) => {
+  res.json({ status: 'ok', service: 'CrowLLM Proxy' });
+});
 
-const REASONING_EFFORT = "high";
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', keyConfigured: !!CROWLLM_API_KEY });
+});
 
-const CROWLLM_URL =
-  "https://crowllm.com/v1/chat/completions";
+app.post('/v1/chat/completions', async (req, res) => {
+  console.log('>>> Request received - Model:', req.body?.model);
 
-// ==========================================
-// CORS
-// ==========================================
-
-app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
-  res.header(
-    "Access-Control-Allow-Headers",
-    "Origin, X-Requested-With, Content-Type, Accept, Authorization"
-  );
-  res.header(
-    "Access-Control-Allow-Methods",
-    "GET, POST, OPTIONS"
-  );
-
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(204);
+  if (!CROWLLM_API_KEY) {
+    return res.status(500).json({
+      error: { message: 'CROWLLM_API_KEY is not set on Render' }
+    });
   }
 
-  next();
-});
-
-// ==========================================
-// HEALTH CHECK
-// ==========================================
-
-app.get("/", (req, res) => {
-  res.json({
-    status: "online",
-    service: "CrowLLM JanitorAI Proxy",
-    model: MODEL,
-    reasoning_effort: REASONING_EFFORT
-  });
-});
-
-// ==========================================
-// CHAT COMPLETIONS
-// ==========================================
-
-app.post("/v1/chat/completions", async (req, res) => {
   try {
-    if (!CROWLLM_API_KEY) {
-      return res.status(500).json({
+    const body = { ...req.body };
+
+    // Optional: light cleaning
+    delete body.extra_body;
+    delete body.logit_bias;
+
+    const modelName = (body.model || '').toLowerCase();
+
+    // === Reasoning control (edit these as you like) ===
+    // You can force reasoning_effort based on the model name
+    if (modelName.includes('glm') || modelName.includes('deepseek') || modelName.includes('kimi')) {
+      body.reasoning_effort = 'high';   // change to 'low' / 'medium' / 'max' if the model supports it
+    }
+
+    // Example: force a specific model (uncomment if you want)
+    // body.model = 'glm-5.3-flashx:free';
+
+    const isStreaming = body.stream === true;
+
+    const response = await axios({
+      method: 'post',
+      url: `${CROWLLM_BASE}/chat/completions`,
+      headers: {
+        'Authorization': `Bearer ${CROWLLM_API_KEY}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0',
+        ...(isStreaming ? { 'Accept': 'text/event-stream' } : {})
+      },
+      data: body,
+      responseType: isStreaming ? 'stream' : 'json',
+      timeout: 180000,
+      validateStatus: () => true
+    });
+
+    if (response.status !== 200) {
+      let errorMsg = 'Unknown error';
+      try {
+        if (typeof response.data === 'string') {
+          errorMsg = response.data;
+        } else if (response.data?.error?.message) {
+          errorMsg = response.data.error.message;
+        } else {
+          errorMsg = JSON.stringify(response.data).slice(0, 500);
+        }
+      } catch (e) {
+        errorMsg = `CrowLLM returned status ${response.status}`;
+      }
+
+      console.error('CrowLLM Error:', response.status, errorMsg);
+
+      return res.status(response.status).json({
         error: {
-          message: "CROWLLM_API_KEY is not configured on Render."
+          message: errorMsg,
+          type: 'upstream_error',
+          code: response.status
         }
       });
     }
 
-    const incoming = req.body || {};
+    if (isStreaming) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      response.data.pipe(res);
+    } else {
+      // Optional: inject reasoning into visible content
+      const data = response.data;
 
-    const payload = {
-      ...incoming,
+      if (data?.choices?.[0]?.message) {
+        const msg = data.choices[0].message;
+        const reasoning = msg.reasoning_content || msg.reasoning || '';
 
-      // Force the model we selected above.
-      model: MODEL,
+        if (reasoning && reasoning.trim().length > 0) {
+          msg.content = `<think>\n\( {reasoning.trim()}\n</think>\n\n \){msg.content || ''}`;
+        }
+      }
 
-      // Attempt to control reasoning.
-      reasoning_effort: REASONING_EFFORT
-    };
-
-    console.log("Sending request to CrowLLM:");
-    console.log({
-      model: payload.model,
-      reasoning_effort: payload.reasoning_effort,
-      stream: payload.stream
-    });
-
-    const response = await fetch(CROWLLM_URL, {
-      method: "POST",
-
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${CROWLLM_API_KEY}`
-      },
-
-      body: JSON.stringify(payload)
-    });
-
-    // Preserve the response content type.
-    const contentType =
-      response.headers.get("content-type") ||
-      "application/json";
-
-    res.status(response.status);
-    res.setHeader("Content-Type", contentType);
-
-    // Forward the response body exactly as received.
-    const body = await response.text();
-
-    console.log("CrowLLM response status:", response.status);
-
-    if (response.status >= 400) {
-      console.log("CrowLLM error:", body);
+      res.json(data);
     }
 
-    res.send(body);
-
-  } catch (error) {
-    console.error("Proxy error:", error);
-
+  } catch (err) {
+    console.error('Proxy error:', err.message);
     res.status(500).json({
       error: {
-        message: "CrowLLM proxy error",
-        details: error.message
+        message: err.message || 'Internal proxy error',
+        type: 'proxy_error',
+        code: 500
       }
     });
   }
 });
 
-// ==========================================
-// START
-// ==========================================
-
-app.listen(PORT, () => {
-  console.log(
-    `CrowLLM proxy running on port ${PORT}`
-  );
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`CrowLLM Proxy running on port ${PORT}`);
 });
