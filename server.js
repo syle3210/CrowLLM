@@ -31,22 +31,11 @@ app.post('/v1/chat/completions', async (req, res) => {
   try {
     const body = { ...req.body };
 
-    // Optional: light cleaning
     delete body.extra_body;
     delete body.logit_bias;
 
-    const modelName = (body.model || '').toLowerCase();
-
-    // === Reasoning control (edit these as you like) ===
-    // You can force reasoning_effort based on the model name
-    if (modelName.includes('glm') || modelName.includes('deepseek') || modelName.includes('kimi')) {
-      body.reasoning_effort = 'high';   // change to 'low' / 'medium' / 'max' if the model supports it
-    }
-
-    // Example: force a specific model (uncomment if you want)
-    // body.model = 'glm-5.3-flashx:free';
-
-    const isStreaming = body.stream === true;
+    // Force non-stream so we can read the full error
+    body.stream = false;
 
     const response = await axios({
       method: 'post',
@@ -54,60 +43,37 @@ app.post('/v1/chat/completions', async (req, res) => {
       headers: {
         'Authorization': `Bearer ${CROWLLM_API_KEY}`,
         'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0',
-        ...(isStreaming ? { 'Accept': 'text/event-stream' } : {})
+        'User-Agent': 'Mozilla/5.0'
       },
       data: body,
-      responseType: isStreaming ? 'stream' : 'json',
-      timeout: 180000,
-      validateStatus: () => true
+      timeout: 60000,
+      validateStatus: () => true,
+      responseType: 'text'
     });
 
+    console.error('===== FULL CROWLLM RESPONSE =====');
+    console.error('Status:', response.status);
+    console.error('Body:', response.data);
+    console.error('=================================');
+
     if (response.status !== 200) {
-      let errorMsg = 'Unknown error';
-      try {
-        if (typeof response.data === 'string') {
-          errorMsg = response.data;
-        } else if (response.data?.error?.message) {
-          errorMsg = response.data.error.message;
-        } else {
-          errorMsg = JSON.stringify(response.data).slice(0, 500);
-        }
-      } catch (e) {
-        errorMsg = `CrowLLM returned status ${response.status}`;
-      }
-
-      console.error('CrowLLM Error:', response.status, errorMsg);
-
       return res.status(response.status).json({
         error: {
-          message: errorMsg,
+          message: response.data || `CrowLLM returned status ${response.status}`,
           type: 'upstream_error',
           code: response.status
         }
       });
     }
 
-    if (isStreaming) {
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      response.data.pipe(res);
-    } else {
-      // Optional: inject reasoning into visible content
-      const data = response.data;
-
-      if (data?.choices?.[0]?.message) {
-        const msg = data.choices[0].message;
-        const reasoning = msg.reasoning_content || msg.reasoning || '';
-
-        if (reasoning && reasoning.trim().length > 0) {
-          msg.content = `<think>\n\( {reasoning.trim()}\n</think>\n\n \){msg.content || ''}`;
-        }
-      }
-
+    // Success
+    try {
+      const data = JSON.parse(response.data);
       res.json(data);
+    } catch (e) {
+      res.status(500).json({
+        error: { message: 'Failed to parse CrowLLM response' }
+      });
     }
 
   } catch (err) {
