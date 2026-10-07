@@ -41,6 +41,7 @@ app.post('/v1/chat/completions', async (req, res) => {
     // Add or remove models here as you like
     if (
       modelName.includes('glm') ||
+      modelName.includes('gpt') ||
       modelName.includes('deepseek') ||
       modelName.includes('kimi') ||
       modelName.includes('qwen')
