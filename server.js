@@ -20,7 +20,7 @@ app.get('/health', (req, res) => {
 });
 
 app.post('/v1/chat/completions', async (req, res) => {
-  console.log('>>> Model:', req.body?.model, '| Stream:', req.body?.stream);
+  console.log('>>> Model:', req.body?.model);
 
   if (!CROWLLM_API_KEY) {
     return res.status(500).json({
@@ -31,26 +31,12 @@ app.post('/v1/chat/completions', async (req, res) => {
   try {
     const body = { ...req.body };
 
-    // Only light cleaning
+    // Light cleaning only
     delete body.extra_body;
     delete body.logit_bias;
 
-    const modelName = (body.model || '').toLowerCase();
-
-    // === Reasoning control ===
-    // Add or remove models here as you like
-    if (
-      modelName.includes('glm') ||
-      modelName.includes('gpt') ||
-      modelName.includes('deepseek') ||
-      modelName.includes('kimi') ||
-      modelName.includes('qwen')
-    ) {
-      // Change this value when you want different effort
-      body.reasoning_effort = 'high';
-    }
-
-    const isStreaming = body.stream === true;
+    // Force non-stream so we can always read the full error body
+    body.stream = false;
 
     const response = await axios({
       method: 'post',
@@ -58,34 +44,23 @@ app.post('/v1/chat/completions', async (req, res) => {
       headers: {
         'Authorization': `Bearer ${CROWLLM_API_KEY}`,
         'Content-Type': 'application/json',
-        ...(isStreaming ? { 'Accept': 'text/event-stream' } : {})
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       },
       data: body,
-      responseType: isStreaming ? 'stream' : 'json',
-      timeout: 180000,
-      validateStatus: () => true
+      timeout: 90000,
+      validateStatus: () => true,
+      responseType: 'text'   // Important: always get text
     });
 
-    // Handle errors
+    console.error('===== FULL CROWLLM RESPONSE =====');
+    console.error('Status:', response.status);
+    console.error('Body:', response.data);
+    console.error('=================================');
+
     if (response.status !== 200) {
-      let errorMsg = 'Unknown error';
-      try {
-        if (typeof response.data === 'string') {
-          errorMsg = response.data;
-        } else if (response.data?.error?.message) {
-          errorMsg = response.data.error.message;
-        } else {
-          errorMsg = JSON.stringify(response.data).slice(0, 400);
-        }
-      } catch (e) {
-        errorMsg = `CrowLLM status ${response.status}`;
-      }
-
-      console.error('CrowLLM Error:', response.status, errorMsg);
-
       return res.status(response.status).json({
         error: {
-          message: errorMsg,
+          message: response.data || `CrowLLM returned status ${response.status}`,
           type: 'upstream_error',
           code: response.status
         }
@@ -93,25 +68,13 @@ app.post('/v1/chat/completions', async (req, res) => {
     }
 
     // Success
-    if (isStreaming) {
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      response.data.pipe(res);
-    } else {
-      const data = response.data;
-
-      // Optional: show reasoning in <think> tags
-      if (data?.choices?.[0]?.message) {
-        const msg = data.choices[0].message;
-        const reasoning = msg.reasoning_content || msg.reasoning || '';
-        if (reasoning && reasoning.trim()) {
-          msg.content = `<think>\n\( {reasoning.trim()}\n</think>\n\n \){msg.content || ''}`;
-        }
-      }
-
+    try {
+      const data = JSON.parse(response.data);
       res.json(data);
+    } catch (e) {
+      res.status(500).json({
+        error: { message: 'Failed to parse CrowLLM response' }
+      });
     }
 
   } catch (err) {
